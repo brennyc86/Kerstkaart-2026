@@ -24,7 +24,8 @@ de overige onderdelen zijn wimpers en wenkbrauw. Op de voorkant staat de kerstbo
 * **Programmeren, op de achterkant:** rij `GND – UPDI 4k7 – VCC` met UPDI in het midden (via R2), en een aparte pad **`HV: UPDI direct`** die rechtstreeks aan de UPDI-pen hangt voor hoogspanningsprogrammering.
 * **Pinnen** (uit het KiCad-symbool): pen 3 GND, 4 VCC, 8 PA7 = knop, 15 PC0 = data, 19 UPDI, 21 = EP (GND).
 
-* **Koper tot de rand:** beide lagen zijn gevuld tot 0,3 mm van de rand (voorkant GND, achterkant VCC). Losse randstukken zijn zwevend koper, puur optisch.
+* **Koper tot de rand:** beide lagen zijn gevuld tot 0,3 mm van de rand (voorkant GND, achterkant VCC), ook smalle randstroken. Losse stukken zijn zwevend koper, puur optisch.
+* **GND-via's:** bij elke GND-aansluiting (alle LED's, ATtiny, C1, knop) zit een via vlak ernaast. De onderlaag is VCC-vlak, dus elke via heeft daar een klein eilandje met vrije ruimte eromheen.
 
 ## Kleurkeuze (1 kleur silk)
 Zwart soldeermasker, witte silk, ENIG-goud: de LED's lichten het mooist op, de boodschap is goed leesbaar en het goud accentueert de blanke pads (`HV`, `UPDI`, batterijpads, oog en neus).

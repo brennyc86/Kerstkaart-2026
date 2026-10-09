@@ -75,8 +75,23 @@ def maak_kunst(outline, P, itemsF, copB, backpads, vias, fps, ctx):
             if bb[2] - bb[0] <= maxw and ruim.contains(t): return t
             hoogte *= 0.95
         return gecentreerd(s, cx, cy, hoogte, spiegel)
-    msg1 = fit(BOODSCHAP[0], 45.0, 41.6, 26.5, 3.9)
-    msg2 = fit(BOODSCHAP[1], 45.0, 37.2, 26.5, 2.7)
+    # boodschap: zoek de grootste plek in het lijf die minstens 1,2 mm vrij is van alle koper op de voorkant (LED's, sporen, pads)
+    koper = itemsF.buffer(1.2)
+    best = None
+    for sc in (1.15, 1.05, 1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6):
+        T1 = gecentreerd(BOODSCHAP[0], 0, 0, 3.9 * sc, False); T2 = gecentreerd(BOODSCHAP[1], 0, 0, 2.7 * sc, False)
+        for cy in range(20, 52):
+            for cx in range(20, 72):
+                t1 = affinity.translate(T1, cx, cy + 2.2 * sc)
+                t2 = affinity.translate(T2, cx, cy - 2.2 * sc)
+                blok = unary_union([t1, t2])
+                if ruim.contains(blok) and not blok.intersects(koper):
+                    d = math.hypot(cx - 40, cy - 36)
+                    if best is None or d < best[0]: best = (d, t1, t2)
+        if best: break
+    if best: msg1, msg2 = best[1], best[2]
+    else:
+        msg1 = fit(BOODSCHAP[0], 45.0, 41.6, 26.5, 3.9); msg2 = fit(BOODSCHAP[1], 45.0, 37.2, 26.5, 2.7); print('LET OP: geen vrije tekstplek')
     F += [msg1, msg2]
     # sneeuwvlokken en sterren in vrije plekken
     kopergebied = itemsF.buffer(1.3)

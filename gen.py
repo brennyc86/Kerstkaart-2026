@@ -183,6 +183,15 @@ r2 = place('R2', RF, CX - 0.4, CY + 4.8, math.pi / 2, {'1': 'UPDI0', '2': 'UPDI_
 track([qp(19), r2['1']], 'UPDI0', w=0.2)
 # knopje = neus van Rudolf (Omron B3U-1000P)
 sw = place('SW1', SWF, KNOP_MM[0], KNOP_MM[1], 0, {'1': 'BTN', '2': 'GND'}, 'B3U-1000P', 'C231329')
+def gnd_via_bij(p, afstanden=(1.0, 1.3, 1.6, 2.0, 2.5)):
+    """GND-via vlak bij een GND-aansluiting, met korte spoor"""
+    for dist in afstanden:
+        for k_ in range(48):
+            ang = k_ * math.pi / 24
+            e = (p[0] + math.cos(ang) * dist, p[1] + math.sin(ang) * dist)
+            if B.vrij(Point(e).buffer(0.3, 16), 'GND', ['F', 'B']) and B.vrij(LineString([p, e]).buffer(0.125, 8), 'GND', ['F']):
+                track([p, e], 'GND', w=0.25); via(e[0], e[1], 'GND'); return e
+    print('GEEN GND-via bij', p); return None
 
 # ---- koperpads op de achterkant: [VCC][UPDI via 4,7k][GND] + directe UPDI (HV) + grote batterijpads
 def bpad(x, y, w, h, netn, label):
@@ -202,6 +211,7 @@ bvia(KX, KY + 2.6, KX, KY + 4.9, 'UPDI0')
 bpad(15.2, 37.2, 4.6, 3.8, 'VCC', 'BT+')
 bpad(15.2, 42.6, 4.6, 3.8, 'GND', 'BT-')
 bvia(15.2, 42.6, 18.9, 42.6, 'GND')
+gnd_via_bij((CX - 3.1, CY + 1.6)); gnd_via_bij(c1['1']); gnd_via_bij(sw['2'])
 # bovenkant: knop, UPDI-routes
 route_free(qp(8), (sw['1'][0], sw['1'][1]), 'BTN', wp=[(CX, CY - 4.2)])
 track([qp(19), (CX - 0.4, CY + 2.4)], 'UPDI0', w=0.2)
@@ -269,7 +279,7 @@ for i in range(len(P)):
                 ang = k_ * math.pi / 12
                 e = (pp['GND'][0] + math.cos(ang) * dist, pp['GND'][1] + math.sin(ang) * dist)
                 trs = LineString([pp['GND'], e]).buffer(0.125, 8)
-                if B.vrij(trs, 'GND', ['F']) and not trs.intersects(rl) and not trs.intersects(seg_out) and not trs.intersects(g['VDD'].buffer(0.75)) and all(trs.distance(g[k_]) >= CLR for k_ in ('DI', 'DO', 'VDD')):
+                if B.vrij(trs, 'GND', ['F']) and not trs.intersects(rl) and not trs.intersects(seg_out) and not trs.intersects(g['VDD'].buffer(0.75)) and all(trs.distance(g[k_]) >= CLR for k_ in ('DI', 'DO', 'VDD')) and B.vrij(Point(e).buffer(0.3, 16), 'GND', ['F', 'B']) and Point(e).buffer(0.3).distance(rl) > 0.05:
                     stub = [pp['GND'], e]; break
             if stub: break
         if stub is None: why['stub'] = why.get('stub', 0) + 1; continue
@@ -284,7 +294,7 @@ for i in range(len(P)):
     for k, gk in led_geoms(i, th).items(): B.add(gk, netsd[k], 'F', 'pad')
     net(netsd['DI']); net(netsd['DO'])
     track(r, netsd['DI'])
-    if stub: track(stub, 'GND', w=0.25)
+    if stub: track(stub, 'GND', w=0.25); via(stub[1][0], stub[1][1], 'GND')
     PP.append((i, th, pp, r))
     B.add(led_geoms(i, th)['VDD'].buffer(0.3), 'VCC', 'F', 'keep')
     prevDO = pp['DO']
@@ -295,9 +305,9 @@ sfail = []
 vfail = []
 for i, th, pp, r in PP:
     vv = None
-    for dist in (1.5, 1.8, 2.2, 2.6, 3.0, 3.6, 4.2, 5.0):
-        for k in range(24):
-            ang = k * math.pi / 12
+    for dist in (1.1, 1.3, 1.5, 1.8, 2.2, 2.6, 3.0, 3.6, 4.2, 5.0, 6.0, 7.0):
+        for k in range(72):
+            ang = k * math.pi / 36
             vx, vy = pp['VDD'][0] + math.cos(ang) * dist, pp['VDD'][1] + math.sin(ang) * dist
             vg = Point(vx, vy).buffer(0.3, 16); tr = LineString([pp['VDD'], (vx, vy)]).buffer(0.15, 8)
             if B.vrij(vg, 'VCC', ['F', 'B']) and B.vrij(tr, 'VCC', ['F']): vv = (vx, vy); break
@@ -311,11 +321,11 @@ def cu(laag): return [(g, n, k) for g, n, l, k in B.items if l == laag and k != 
 def zones(laag, netn):
     items = cu(laag)
     fremd = unary_union([g.buffer(CLR) for g, n, k in items if n != netn])
-    pour = outline.buffer(-0.3).difference(fremd).buffer(-0.12).buffer(0.12)
+    pour = outline.buffer(-0.3).difference(fremd).buffer(-0.1).buffer(0.1)
     comps = list(pour.geoms) if hasattr(pour, 'geoms') else [pour]
     own = [g for g, n, k in items if n == netn]
     keep = [c for c in comps if any(c.buffer(0.02).intersects(o) for o in own)]
-    losse = [c for c in comps if c not in keep and c.area > 0.8]   # randvulling / eilanden: puur optisch, zwevend
+    losse = [c for c in comps if c not in keep and c.area > 0.15]   # randvulling / eilanden: puur optisch, zwevend
     alles = unary_union(own + keep).buffer(0.02)
     delen = list(alles.geoms) if hasattr(alles, 'geoms') else [alles]
     # elk deel van dit net moet in één samenhangend geheel zitten
@@ -439,6 +449,8 @@ def kicad_footprint(f):
         if isinstance(el, list) and el and el[0] == 'property':
             if el[1] == 'Reference': el[2] = Q(ref)
             if el[1] == 'Value': el[2] = Q(val)
+            if el[1] in ('Reference', 'Value'): el.append(['hide', 'yes'])
+        if isinstance(el, list) and el and el[0] == 'fp_text': continue
         if isinstance(el, list) and el and el[0] == 'pad':
             nr = el[1]
             n = f['netmap'].get(nr, '')

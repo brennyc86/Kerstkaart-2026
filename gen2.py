@@ -356,7 +356,8 @@ with open(f'{OUT}/CPL_kerstkaart_2026.csv', 'w') as fh:
 
 # ------------------------------------------------------------------ KiCad (best effort)
 def kicad_footprint(f):
-    node = json.loads(json.dumps(lib(f['lib'])))   # diepe kopie
+    import copy
+    node = copy.deepcopy(lib(f['lib']))[2:]   # diepe kopie zonder 'footprint' + naam
     out = []
     ref, val = f['ref'], f['val']
     OX, OY = 20, 140

@@ -19,10 +19,11 @@ kop = ell(88, 74, 13, 9, -15)
 snuit = tube([(92, 70), (106, 66)], 11)
 staart = tube([(12, 48), (3, 55)], 9)
 # geweien: twee takken, beam + tines
-gew_a = [tube([(80, 82), (74, 96), (66, 106)], 9), tube([(74, 95), (62, 94)], 6.5), tube([(71, 100), (74, 112)], 9)]
 gew_b = [tube([(90, 82), (96, 96), (104, 106)], 9), tube([(96, 95), (108, 94)], 6.5), tube([(99, 100), (96, 112)], 6.5)]
 oor = ell(78, 82, 4, 8, 25)
-kroon = ell(82, 78, 9, 8)
+kroon = ell(85, 78, 11, 8)
+
+gew_a = [affinity.scale(g, -1, 1, origin=(85, 0)) for g in gew_b]
 
 def silhouet():
     u = unary_union(poten + [lijf, hals, kop, snuit, staart, kroon] + gew_a + gew_b)

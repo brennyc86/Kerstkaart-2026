@@ -1,5 +1,5 @@
 // Kerstkaart 2026 - Rudolf het rendier
-// ATtiny1616 @ 16 MHz (megaTinyCore), 49x WS2812B-2020 aan PC0, knop op PA7 (naar GND)
+// ATtiny1616-M (VQFN-20) @ 16 MHz (megaTinyCore), 49x WS2812B-2020 aan PC0 (pen 15), knop op PA7 (pen 8, naar GND)
 // Korte druk = volgend programma, lang (>0,8 s) = helderheid wisselen.
 #include <tinyNeoPixel.h>
 #include <EEPROM.h>
@@ -7,7 +7,6 @@
 
 #define PIN_LEDS  PIN_PC0
 #define PIN_KNOP  PIN_PA7
-#define PIN_BUZ   PIN_PB0
 #define N_MODUS   7
 
 tinyNeoPixel pix = tinyNeoPixel(N_LED, PIN_LEDS, NEO_GRB + NEO_KHZ800);
@@ -42,8 +41,7 @@ void m_rudolf(unsigned long t) {
     uint8_t f = 40 + golf(t / 8 + i * 37, 1500) / 4;
     pix.setPixelColor(i, kleur(255, 150, 20, f / 2));
   }
-  for (uint8_t i = GEWEI_B_VAN; i <= GEWEI_B_TOT; i++) pix.setPixelColor(i, kleur(255, 240, 200, 60 + golf(t / 6 + i * 50, 2000) / 3));
-  for (uint8_t i = GEWEI_A_VAN; i <= GEWEI_A_TOT; i++) pix.setPixelColor(i, kleur(255, 240, 200, 60 + golf(t / 6 + i * 50, 2000) / 3));
+  for (uint8_t i = GEWEI_B_VAN; i <= GEWEI_A_TOT; i++) pix.setPixelColor(i, kleur(255, 240, 200, 60 + golf(t / 6 + gewei_rang(i) * 50, 2000) / 3));
   pix.setPixelColor(NEUS, kleur(255, 0, 0, 60 + golf(t / 3, 1600) * 3 / 4));
   bool knip = (t % 4000) > 3850;
   pix.setPixelColor(OOG, knip ? 0 : kleur(255, 255, 255, 140));
@@ -55,6 +53,12 @@ void m_komeet(unsigned long t) {
   for (uint8_t s = 0; s < 10; s++) {
     int i = kop - s;
     if (i >= 0 && i < N_LED) pix.setPixelColor(i, kleur(200, 220, 255, 255 >> (s / 2 + (s > 0))));
+  }
+  // geweien: beide krijgen exact dezelfde komeet (op spiegel-positie), niet na elkaar
+  int rk = (kop - GEWEI_B_VAN) / 2;                 // 'kop' loopt door beide geweien, rank door het gewei
+  for (uint8_t i = GEWEI_B_VAN; i <= GEWEI_A_TOT; i++) {
+    int d = rk - gewei_rang(i);
+    pix.setPixelColor(i, (d >= 0 && d < 5) ? kleur(200, 220, 255, 255 >> d) : 0);
   }
   pix.setPixelColor(NEUS, kleur(255, 0, 0, 200));
 }
@@ -85,7 +89,7 @@ void m_gewei(unsigned long t) {
   for (uint8_t i = 0; i < N_LED; i++) pix.setPixelColor(i, kleur(255, 120, 10, 35));
   uint8_t stap = (t / 350) % 4;
   for (uint8_t i = GEWEI_B_VAN; i <= GEWEI_A_TOT; i++) {
-    const uint8_t *c = kl[(i + stap) % 4];
+    const uint8_t *c = kl[(gewei_rang(i) + stap) % 4];   // beide geweien lopen gelijk
     pix.setPixelColor(i, kleur(c[0], c[1], c[2], 220));
   }
   pix.setPixelColor(NEUS, kleur(255, 0, 0, 255));
@@ -111,7 +115,6 @@ void knop_wacht_los() { while (digitalRead(PIN_KNOP) == LOW) delay(10); }
 void setup() {
   pix.begin();
   pinMode(PIN_KNOP, INPUT_PULLUP);
-  pinMode(PIN_BUZ, OUTPUT);
   modus = EEPROM.read(0) % N_MODUS;
   helderheid = EEPROM.read(1) % 3;
   randomSeed(analogRead(PIN_PA4));

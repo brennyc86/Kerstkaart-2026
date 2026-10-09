@@ -19,7 +19,7 @@ OUT = 'productie'
 os.makedirs(OUT, exist_ok=True)
 
 outline = affinity.scale(silhouet(), S, S, origin=(0, 0)).simplify(0.05)
-inner_led = outline.buffer(-2.0)
+inner_led = outline.buffer(-1.9)
 
 # ------------------------------------------------------------------ board / DRC
 class Board:
@@ -27,7 +27,7 @@ class Board:
     def vrij(s, geom, net, lagen):
         if not outline.buffer(-EDGE).contains(geom): return False
         for g, n, l, k in s.items:
-            if n and n == net: continue
+            if k == 'keep' or (n and n == net): continue
             if l in lagen and g.distance(geom) < CLR: return False
         return True
     def add(s, geom, net, laag, kind): s.items.append((geom, net, laag, kind))
@@ -97,60 +97,119 @@ def place(ref, naam, x, y, th, netmap, val, lcsc, reg=True):
     return centers
 
 # ------------------------------------------------------------------ onderdelen
-QFN, LEDF, RF, CF, SWF = ('VQFN-20-1EP_3x3mm_P0.4mm_EP1.7x1.7mm', 'LED_WS2812B-2020_PLCC4_2.0x2.0mm',
-                          'R_0603_1608Metric', 'C_0603_1608Metric', 'SW_Push_1P1T_XKB_TS-1187A')
-CX, CY = 35.0, 38.8
+QFN, LEDF, RF, CF, SWF, JSTF = ('VQFN-20-1EP_3x3mm_P0.4mm_EP1.7x1.7mm', 'LED_SK6812_EC15_1.5x1.5mm', 'R_0603_1608Metric',
+                                'C_0603_1608Metric', 'SW_SPST_B3U-1000P', 'JST_PH_S2B-PH-SM4-TB_1x02-1MP_P2.00mm_Horizontal')
+from ketting import OOG_MM, KNOP_MM, NEUS_MM, JST_MM
+CX, CY = OOG_MM
 def qp(n):   # padcentrum van QFN-pen n (1..20), y omhoog
     if n <= 5: return (CX - 1.45, CY + 0.8 - (n - 1) * 0.4)
     if n <= 10: return (CX - 0.8 + (n - 6) * 0.4, CY - 1.45)
     if n <= 15: return (CX + 1.45, CY - 0.8 + (n - 11) * 0.4)
     return (CX + 0.8 - (n - 16) * 0.4, CY + 1.45)
 
-# pin 3 GND, 4 VCC, 8 PA7 (knop), 15 PC0 (data), 19 UPDI, 21 = EP (GND)
+
+import heapq
+_vg = None
+def poly_path(a, b):
+    """kortste pad binnen het bord (zichtbaarheidsgraaf over de bochtpunten)"""
+    global _vg
+    pol = outline.buffer(-0.9).simplify(0.15)
+    if _vg is None:
+        _vg = [c for ring in [pol.exterior] + list(pol.interiors) for c in ring.coords[:-1]] if pol.geom_type == 'Polygon' else []
+    pts = [a, b] + _vg
+    area = pol.buffer(0.02)
+    def ok(p, q): return area.contains(LineString([p, q]))
+    dist = {0: 0.0}; prev = {}; pq = [(0.0, 0)]; done = set()
+    while pq:
+        d, u = heapq.heappop(pq)
+        if u in done: continue
+        done.add(u)
+        if u == 1: break
+        for v in range(len(pts)):
+            if v in done or v == u: continue
+            if not ok(pts[u], pts[v]): continue
+            nd = d + math.dist(pts[u], pts[v])
+            if nd < dist.get(v, 1e9): dist[v] = nd; prev[v] = u; heapq.heappush(pq, (nd, v))
+    if 1 not in prev and 1 not in done: return None
+    path = [1]
+    while path[-1] != 0: path.append(prev[path[-1]])
+    return [pts[i] for i in reversed(path)]
+
+def route_free(a, b, netn, w=0.2, laag='F', wp=()):
+    """kortste geldige route a->b (rechte lijn, knikken, omwegen); waarschuwt als niets past"""
+    for r in routes(a, b, list(wp)):
+        ln = LineString(r).buffer(w / 2, 8)
+        if B.vrij(ln, netn, [laag]):
+            track(r, netn, laag, w); return r
+    print('WAARSCHUWING: geen route voor', netn, a, b)
+    r = [a, b]; track(r, netn, laag, w); return r
+
+def routes(a, b, wp):
+    yield [a] + wp + [b]
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    for mid in ((b[0], a[1]), (a[0], b[1])): yield [a] + wp + [mid, b]
+    L = math.hypot(dx, dy) or 1
+    mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+    for off in (2, -2, 4, -4, 6, -6, 9, -9, 13, -13): yield [a] + wp + [(mx - dy / L * off, my + dx / L * off), b]
+    m = min(abs(dx), abs(dy))
+    if m > 0.3:
+        yield [a] + wp + [(a[0] + math.copysign(m, dx), a[1] + math.copysign(m, dy)), b]
+        yield [a] + wp + [(b[0] - math.copysign(m, dx), b[1] - math.copysign(m, dy)), b]
+    D = 1.4
+    diag = [(D, D), (D, -D), (-D, D), (-D, -D)]
+    for da in diag:                                   # eerst diagonaal weg van het pad (draai-om bij tak-uiteinden)
+        yield [a, (a[0] + da[0], a[1] + da[1])] + wp + [b]
+    for db in diag:
+        yield [a] + wp + [(b[0] + db[0], b[1] + db[1]), b]
+    for da in diag:
+        for db in diag:
+            yield [a, (a[0] + da[0], a[1] + da[1])] + wp + [(b[0] + db[0], b[1] + db[1]), b]
+    vp = poly_path(a, b)
+    if vp: yield vp
+
+# U1 = oog van Rudolf. pen 3 GND, 4 VCC, 8 PA7 (knop), 15 PC0 (data), 19 UPDI/PA0, 21 = EP (GND)
 place('U1', QFN, CX, CY, 0, {'3': 'GND', '4': 'VCC', '8': 'BTN', '15': 'DATA0', '19': 'UPDI0', '21': 'GND'},
       'ATtiny1616-MNR (VQFN-20)', 'C507118')
-# EP en pen 3 aan elkaar + uitloop
 track([qp(3), (CX - 0.5, CY)], 'GND', w=0.2)
 track([qp(3), (CX - 2.3, CY), (CX - 3.1, CY + 0.9), (CX - 3.1, CY + 1.6)], 'GND', w=0.2)
-# VCC: pen 4 -> via -> C1
 track([qp(4), (CX - 2.4, CY - 0.4), (CX - 3.0, CY - 1.0)], 'VCC', w=0.2)
 via(CX - 3.0, CY - 1.0, 'VCC')
 c1 = place('C1', CF, CX - 4.8, CY - 0.4, 0, {'1': 'GND', '2': 'VCC'}, '100nF 0603', 'C14663')
 track([(CX - 3.0, CY - 1.0), c1['2']], 'VCC', w=0.2)
-# knop SW1: pen 8 omlaag naar pad 1 (BTN), pad 2 GND
-SWY = CY - 6.9
-sw = place('SW1', SWF, CX, SWY, 0, {'1': 'BTN', '2': 'GND'}, 'TS-1187A-B-A-B', 'C318884')
-track([qp(8), (CX, CY - 3.0), (CX - 3.0, CY - 3.0), (CX - 3.0, SWY + 1.875)], 'BTN', w=0.2)
-# data: pen 15 -> R1 (330R) -> keten
 r1 = place('R1', RF, CX + 4.725, CY + 0.8, 0, {'1': 'DATA0', '2': 'DATA1'}, '330R 0603', 'C23138')
 track([qp(15), r1['1']], 'DATA0', w=0.2)
 DATA_START = r1['2']
-# UPDI: pen 19 omhoog -> R2 (4.7k) ; direct pad via aparte aftakking
-r2 = place('R2', RF, CX - 0.4, CY + 3.9, math.pi / 2, {'1': 'UPDI0', '2': 'UPDI_R'}, '4.7k 0603', 'C23162')
+r2 = place('R2', RF, CX - 0.4, CY + 4.8, math.pi / 2, {'1': 'UPDI0', '2': 'UPDI_R'}, '4.7k 0603', 'C23162')
 track([qp(19), r2['1']], 'UPDI0', w=0.2)
+# knopje = neus van Rudolf (Omron B3U-1000P)
+sw = place('SW1', SWF, KNOP_MM[0], KNOP_MM[1], 0, {'1': 'BTN', '2': 'GND'}, 'B3U-1000P', 'C231329')
+# tweede batterij-aansluiting: JST-PH (pen 1 = +, pen 2 = -), plug komt in de buikopening
+jst = place('J1', JSTF, JST_MM[0], JST_MM[1], -math.pi / 2, {'1': 'VCC', '2': 'GND'}, 'S2B-PH-SM4-TB(LF)(SN)', 'C295747')
 
-# ---- koperpads op de achterkant: [VCC][UPDI via 4.7k][GND] + directe UPDI + batterij
+# ---- koperpads op de achterkant: [VCC][UPDI via 4,7k][GND] + directe UPDI (HV) + grote batterijpads
 def bpad(x, y, w, h, netn, label):
     net(netn); backpads.append((x, y, w, h, netn, label))
     B.add(box(x - w / 2, y - h / 2, x + w / 2, y + h / 2), netn, 'B', 'pad')
-KX, KY = 20.04, 40.0
+def bvia(px, py, vx, vy, netn):
+    via(vx, vy, netn); track([(px, py), (vx, vy)], netn, 'B', 0.3)
+KX, KY = 68.04, 62.0
 bpad(KX - 2.54, KY, 1.9, 1.7, 'VCC', 'VCC')
 bpad(KX, KY, 1.9, 1.7, 'UPDI_R', 'UPDI')
 bpad(KX + 2.54, KY, 1.9, 1.7, 'GND', 'GND')
-bpad(KX, KY - 2.6, 1.9, 1.7, 'UPDI0', 'HV')
-bpad(14.2, 36.0, 3.0, 3.0, 'VCC', 'BT+')
-bpad(14.2, 40.8, 3.0, 3.0, 'GND', 'BT-')
-# vias + sporen voor de pads (achterspoor van pad naar via)
-def bvia(px, py, vx, vy, netn):
-    via(vx, vy, netn); track([(px, py), (vx, vy)], netn, 'B', 0.3)
-bvia(KX, KY, KX, KY + 2.0, 'UPDI_R')
-bvia(KX + 2.54, KY, KX + 2.54, KY - 2.0, 'GND')
-bvia(KX, KY - 2.6, KX, KY - 4.6, 'UPDI0')
-bvia(14.2, 40.8, 16.4, 43.4, 'GND')
-# bovenkant: UPDI_R (R2 pad 2 -> via boven de middenpad), UPDI direct (aftakking -> via onder)
-track([r2['2'], (CX - 0.4, CY + 5.6), (27.0, CY + 5.6), (27.0, KY + 2.0), (KX, KY + 2.0)], 'UPDI_R', w=0.2)
+bpad(KX, KY + 2.6, 1.9, 1.7, 'UPDI0', 'HV')
+bvia(KX, KY, KX, KY - 2.2, 'UPDI_R')
+bvia(KX + 2.54, KY, KX + 2.54, KY - 2.2, 'GND')
+bvia(KX, KY + 2.6, KX, KY + 4.9, 'UPDI0')
+# grote batterijpads (draden aansoldeerbaar)
+bpad(15.2, 37.2, 4.6, 3.8, 'VCC', 'BT+')
+bpad(15.2, 42.6, 4.6, 3.8, 'GND', 'BT-')
+bvia(15.2, 42.6, 18.9, 42.6, 'GND')
+# bovenkant: knop, UPDI-routes, JST-via
+route_free(qp(8), (sw['1'][0], sw['1'][1]), 'BTN', wp=[(CX, CY - 4.2)])
 track([qp(19), (CX - 0.4, CY + 2.4)], 'UPDI0', w=0.2)
-track([(CX - 0.4, CY + 2.4), (CX - 2.8, CY + 2.4), (25.4, 38.8), (25.4, KY - 4.6), (KX, KY - 4.6)], 'UPDI0', w=0.2)
+route_free((CX - 0.4, CY + 2.4), (KX, KY + 4.9), 'UPDI0')
+route_free(r2['2'], (KX, KY - 2.2), 'UPDI_R')
+via(jst['1'][0] + 3.0, jst['1'][1], 'VCC'); track([jst['1'], (jst['1'][0] + 3.0, jst['1'][1])], 'VCC', w=0.5)
 
 # ------------------------------------------------------------------ LED-keten
 led = keten()
@@ -159,26 +218,14 @@ for naam, p, wp in led:
     q = Point(p[0] * S, p[1] * S)
     if not inner_led.contains(q): q = nearest_points(inner_led.boundary, q)[0]
     P.append((q.x, q.y, naam, [(w[0] * S, w[1] * S) for w in wp]))
-LP = {'DO': (-0.915, 0.55), 'GND': (-0.915, -0.55), 'DI': (0.915, -0.55), 'VDD': (0.915, 0.55)}
-LNR = {'DO': '1', 'GND': '2', 'DI': '3', 'VDD': '4'}
+# SK6805-EC15 (datasheet): 1 DIN (links onder), 2 VDD (rechts onder), 3 DOUT (rechts boven), 4 GND (links boven)
+LP = {'DI': (-0.45, -0.45), 'VDD': (0.45, -0.45), 'DO': (0.45, 0.45), 'GND': (-0.45, 0.45)}
+LNR = {'DI': '1', 'VDD': '2', 'DO': '3', 'GND': '4'}
 
 def led_pads(i, th): return {k: (P[i][0] + rot(v, th)[0], P[i][1] + rot(v, th)[1]) for k, v in LP.items()}
 def led_geoms(i, th):
     pp = led_pads(i, th)
-    return {k: affinity.rotate(box(-.35, -.35, .35, .35), math.degrees(th), origin=(0, 0)) for k in pp} and \
-           {k: affinity.translate(affinity.rotate(box(-.35, -.35, .35, .35), math.degrees(th), origin=(0, 0)), *pp[k]) for k in pp}
-
-def routes(a, b, wp):
-    yield [a] + wp + [b]
-    dx, dy = b[0] - a[0], b[1] - a[1]
-    for mid in ((b[0], a[1]), (a[0], b[1])): yield [a] + wp + [mid, b]
-    L = math.hypot(dx, dy) or 1
-    mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
-    for off in (2, -2, 4, -4, 6, -6, 9, -9): yield [a] + wp + [(mx - dy / L * off, my + dx / L * off), b]
-    m = min(abs(dx), abs(dy))
-    if m > 0.3:
-        yield [a] + wp + [(a[0] + math.copysign(m, dx), a[1] + math.copysign(m, dy)), b]
-        yield [a] + wp + [(b[0] - math.copysign(m, dx), b[1] - math.copysign(m, dy)), b]
+    return {k: affinity.translate(affinity.rotate(box(-.25, -.25, .25, .25), math.degrees(th), origin=(0, 0)), *pp[k]) for k in pp}
 
 fails, rots, PP = [], [], []
 prevDO = None
@@ -187,43 +234,67 @@ for i in range(len(P)):
     nxt = (P[i + 1][3][0] if P[i + 1][3] else (P[i + 1][0], P[i + 1][1])) if i + 1 < len(P) else None
     prv = (P[i][3][-1] if P[i][3] else (P[i - 1][0], P[i - 1][1])) if i > 0 else (x - 1, y)
     if nxt is None: nxt = (x + (x - prv[0]), y + (y - prv[1]))
-    ideal = math.atan2(nxt[1] - y, nxt[0] - x) + math.pi
-    cands = sorted([k * math.pi / 8 for k in range(16)], key=lambda t: abs((t - ideal + math.pi) % (2 * math.pi) - math.pi))
+    ideal = math.atan2(nxt[1] - y, nxt[0] - x) - math.pi / 4      # datastroom loopt diagonaal DIN -> DOUT
+    cands = sorted([k * math.pi / 2 for k in range(4)], key=lambda t: abs((t - ideal + math.pi) % (2 * math.pi) - math.pi))   # alleen rechte standen
     gekozen = None; why = {}
     for th in cands:
         g = led_geoms(i, th); pp = led_pads(i, th)
         netsd = {'DO': f'D{i + 1}' if i + 1 < len(P) else '', 'GND': 'GND', 'DI': f'D{i}' if i > 0 else 'DATA1', 'VDD': 'VCC'}
         if not all(B.vrij(g[k], netsd[k], ['F']) for k in g): why['pads'] = why.get('pads', 0) + 1; continue
         keep = g['VDD'].buffer(0.3)
+        seg_out = Point(0, 0).buffer(0)
         if i + 1 < len(P):
             tgt = P[i + 1][3][0] if P[i + 1][3] else (P[i + 1][0], P[i + 1][1])
             d_ = (tgt[0] - pp['DO'][0], tgt[1] - pp['DO'][1]); L_ = math.hypot(*d_) or 1
-            seg = LineString([pp['DO'], (pp['DO'][0] + d_[0] / L_ * min(L_, 3), pp['DO'][1] + d_[1] / L_ * min(L_, 3))]).buffer(TW / 2 + CLR)
-            if any(seg.intersects(g[kk]) for kk in g if kk != 'DO') or seg.intersects(keep): why['uit'] = why.get('uit', 0) + 1; continue
+            seg = LineString([pp['DO'], (pp['DO'][0] + d_[0] / L_ * min(L_, 1.3), pp['DO'][1] + d_[1] / L_ * min(L_, 1.3))]).buffer(TW / 2 + CLR)
+            seg_out = LineString([pp['DO'], (pp['DO'][0] + d_[0] / L_ * min(L_, 6), pp['DO'][1] + d_[1] / L_ * min(L_, 6))]).buffer(TW / 2 + CLR + 0.1)
+            pass
         okroute = None
         a = prevDO if prevDO is not None else DATA_START
-        wps = P[i][3] if prevDO is not None else [(CX + 6.2, CY + 0.8), (CX + 6.2, 28.2)]
+        wps = P[i][3]
         for r in routes(a, pp['DI'], wps):
             ln = LineString(r).buffer(TW / 2, 8)
-            if B.vrij(ln, netsd['DI'], ['F']) and not ln.buffer(CLR).intersects(keep): okroute = r; break
-        if okroute is None: why['route'] = why.get('route', 0) + 1; continue
-        gekozen = (th, pp, okroute, netsd); break
+            if B.vrij(ln, netsd['DI'], ['F']) and not ln.intersects(g['VDD'].buffer(0.12)): okroute = r; break
+        if okroute is None:
+            why['route'] = why.get('route', 0) + 1
+            if os.environ.get('DBGLED') == str(i):
+                for rr in routes(a, pp['DI'], wps):
+                    l2 = LineString(rr).buffer(TW / 2, 8)
+                    print('   cand', round(math.degrees(th)), len(rr), 'binnen', outline.buffer(-EDGE).contains(l2), 'conf', [(n, k) for gg, n, l, k in B.items if l == 'F' and k != 'keep' and n != netsd['DI'] and gg.distance(l2) < CLR][:2], 'vdd', l2.intersects(g['VDD'].buffer(0.12)))
+            r0 = [a] + wps + [pp['DI']]; ln0 = LineString(r0).buffer(TW / 2, 8)
+            why.setdefault('dbg', []).append((round(math.degrees(th)), outline.buffer(-EDGE).contains(ln0), [(n, k, round(gg.distance(ln0), 2)) for gg, n, l, k in B.items if l == 'F' and n != netsd['DI'] and gg.distance(ln0) < CLR][:3], ln0.intersects(keep)))
+            continue
+        # GND-stub moet kunnen: korte aftakking van het GND-pad naar open koper
+        rl = LineString(okroute).buffer(TW / 2 + CLR)
+        stub = None
+        for dist in (1.0, 1.4, 1.9):
+            for k_ in range(24):
+                ang = k_ * math.pi / 12
+                e = (pp['GND'][0] + math.cos(ang) * dist, pp['GND'][1] + math.sin(ang) * dist)
+                trs = LineString([pp['GND'], e]).buffer(0.125, 8)
+                if B.vrij(trs, 'GND', ['F']) and not trs.intersects(rl) and not trs.intersects(seg_out) and not trs.intersects(g['VDD'].buffer(0.75)):
+                    stub = [pp['GND'], e]; break
+            if stub: break
+        if stub is None: why['stub'] = why.get('stub', 0) + 1; continue
+        gekozen = (th, pp, okroute, netsd, stub); break
     if gekozen is None:
         fails.append(i); print('fail', i, P[i][2], why)
         th = cands[0]; pp = led_pads(i, th)
         netsd = {'DO': f'D{i + 1}', 'GND': 'GND', 'DI': f'D{i}' if i else 'DATA1', 'VDD': 'VCC'}
-        gekozen = (th, pp, next(routes(prevDO if prevDO is not None else DATA_START, pp['DI'], P[i][3])), netsd)
-    th, pp, r, netsd = gekozen
+        gekozen = (th, pp, next(routes(prevDO if prevDO is not None else DATA_START, pp['DI'], P[i][3])), netsd, None)
+    th, pp, r, netsd, stub = gekozen
     rots.append(th)
     for k, gk in led_geoms(i, th).items(): B.add(gk, netsd[k], 'F', 'pad')
     net(netsd['DI']); net(netsd['DO'])
     track(r, netsd['DI'])
+    if stub: track(stub, 'GND', w=0.25)
     PP.append((i, th, pp, r))
     B.add(led_geoms(i, th)['VDD'].buffer(0.3), 'VCC', 'F', 'keep')
     prevDO = pp['DO']
-    fps.append(dict(ref=f'D{i + 1}', lib=LEDF, x=x, y=y, th=th, val='WS2812B-2020', lcsc='C965555',
-                    netmap={'1': netsd['DO'], '2': 'GND', '3': netsd['DI'], '4': 'VCC'}))
+    fps.append(dict(ref=f'D{i + 1}', lib=LEDF, x=x, y=y, th=th, val='SK6805-EC15', lcsc='C2890035',
+                    netmap={'1': netsd['DI'], '2': 'VCC', '3': netsd['DO'], '4': 'GND'}))
 
+sfail = []
 vfail = []
 for i, th, pp, r in PP:
     vv = None
@@ -236,7 +307,7 @@ for i, th, pp, r in PP:
         if vv: break
     if vv is None: vfail.append(i); vv = (pp['VDD'][0] + 1.2, pp['VDD'][1] + 1.2)
     track([pp['VDD'], vv], 'VCC', w=0.3); via(vv[0], vv[1], 'VCC')
-print('LED-fouten', fails, 'via-fouten', vfail, 'aantal LED', len(P))
+print('LED-fouten', fails, 'via-fouten', vfail, 'GND-stub-fouten', sfail, 'aantal LED', len(P))
 
 # ------------------------------------------------------------------ koperlagen
 def cu(laag): return [(g, n, k) for g, n, l, k in B.items if l == laag and k != 'keep']
@@ -293,7 +364,7 @@ def fp_silk(f):
 
 silkF_lib = unary_union([g for g in (fp_silk(f) for f in fps) if g is not None])
 itemsF = unary_union([gg for gg, n, kk in cu('F')])
-kunst = maak_kunst(outline, P, itemsF, copB, backpads, vias, fps)
+kunst = maak_kunst(outline, P, itemsF, copB, backpads, vias, fps, dict(oog=OOG_MM, knop=KNOP_MM, neus=NEUS_MM, jst=JST_MM, jst1=jst['1'], jst2=jst['2']))
 copper_all = unary_union([copF.buffer(0.0)])
 verbod = unary_union([maskF.buffer(0.15), unary_union([g.buffer(0.2) for g, n, l, k in B.items if l == 'F' and k in ('pad', 'via')])])
 silkF = unary_union([silkF_lib.difference(maskF.buffer(0.12)), kunst['F'].difference(verbod)])
@@ -454,8 +525,8 @@ for nm, gg in groupby(P, key=lambda p: p[2]):
     l = len(list(gg)); grpn.setdefault(nm, []).append((idx, idx + l - 1)); idx += l
 hdr += [f'#define GEWEI_B_VAN {grpn["gewei_b"][0][0]}', f'#define GEWEI_B_TOT {grpn["gewei_b"][0][1]}',
         f'#define GEWEI_A_VAN {grpn["gewei_a"][0][0]}', f'#define GEWEI_A_TOT {grpn["gewei_a"][0][1]}',
-        f'#define NEUS {grpn["neus"][0][0]}', f'#define OOG {grpn["oog"][0][0]}',
-        f'#define KOP_VAN {grpn["kin"][0][0]}', f'#define KOP_TOT {grpn["snuit"][0][1]}', f'#define STAART {grpn["staart"][0][0]}', '',
+        f'#define NEUS {grpn["neus"][0][0]}', f'#define KOP {grpn["kop"][0][0]}', f'#define KIN {grpn["kin"][0][0]}',
+        '',
         '// Beide geweien hebben evenveel LED\'s; A loopt in de keten omgekeerd t.o.v. B.',
         '// gewei_rang(i) geeft de spiegel-positie binnen het gewei (0..GEWEI_N-1) zodat beide geweien identiek reageren.',
         '#define GEWEI_N (GEWEI_B_TOT - GEWEI_B_VAN + 1)',

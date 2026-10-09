@@ -1,5 +1,6 @@
 // Kerstkaart 2026 - Rudolf het rendier
-// ATtiny1616-M (VQFN-20) @ 16 MHz (megaTinyCore), 49x WS2812B-2020 aan PC0 (pen 15), knop op PA7 (pen 8, naar GND)
+// ATtiny1616-M (VQFN-20) @ 16 MHz (megaTinyCore): de chip is het oog van Rudolf.
+// SK6805-EC15 NeoPixels aan PC0 (pen 15); knop (= neus) op PA7 (pen 8, naar GND)
 // Korte druk = volgend programma, lang (>0,8 s) = helderheid wisselen.
 #include <tinyNeoPixel.h>
 #include <EEPROM.h>
@@ -43,8 +44,6 @@ void m_rudolf(unsigned long t) {
   }
   for (uint8_t i = GEWEI_B_VAN; i <= GEWEI_A_TOT; i++) pix.setPixelColor(i, kleur(255, 240, 200, 60 + golf(t / 6 + gewei_rang(i) * 50, 2000) / 3));
   pix.setPixelColor(NEUS, kleur(255, 0, 0, 60 + golf(t / 3, 1600) * 3 / 4));
-  bool knip = (t % 4000) > 3850;
-  pix.setPixelColor(OOG, knip ? 0 : kleur(255, 255, 255, 140));
 }
 // 1: Vliegende komeet langs de hele keten
 void m_komeet(unsigned long t) {
@@ -104,9 +103,9 @@ void m_adem(unsigned long t) {
 void m_neus(unsigned long t) {
   wis();
   uint8_t f = golf(t / 2, 1200);
-  for (uint8_t i = KOP_VAN; i <= KOP_TOT; i++) pix.setPixelColor(i, kleur(255, 40, 0, f / 6));
+  pix.setPixelColor(KOP, kleur(255, 40, 0, f / 6));
+  pix.setPixelColor(KIN, kleur(255, 40, 0, f / 6));
   pix.setPixelColor(NEUS, kleur(255, 0, 0, 30 + f * 7 / 8));
-  pix.setPixelColor(OOG, kleur(255, 255, 255, 100));
   for (uint8_t i = GEWEI_B_VAN; i <= GEWEI_A_TOT; i++) if (random(40) == 0) pix.setPixelColor(i, kleur(255, 255, 255, 200));
 }
 

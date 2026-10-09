@@ -48,54 +48,81 @@ def ster(cx, cy, r):
         pts.append((cx + rr * math.cos(a), cy + rr * math.sin(a)))
     return Polygon(pts)
 
-def maak_kunst(outline, P, copF, copB, backpads, vias, fps):
-    # ---------- achterkant: boodschap (gespiegeld zodat hij leesbaar is als je de kaart omdraait)
-    xmid = 47.5
-    g = []
-    ruimte_B = outline.buffer(-3.0).difference(unary_union([box(x - w / 2 - 1, y - h / 2 - 1, x + w / 2 + 1, y + h / 2 + 1) for x, y, w, h, n, l in backpads]))
+def boog(cx, cy, r, a0, a1, w=0.25, n=48):
+    pts = [(cx + r * math.cos(math.radians(a0 + (a1 - a0) * t / n)), cy + r * math.sin(math.radians(a0 + (a1 - a0) * t / n))) for t in range(n + 1)]
+    return LineString(pts).buffer(w / 2, 4)
+
+def maak_kunst(outline, P, itemsF, copB, backpads, vias, fps, ctx):
+    from shapely.geometry import MultiPoint
+    oog, knop, neus, jst = ctx['oog'], ctx['knop'], ctx['neus'], ctx['jst']
+    F = []
+    # ---------- voorkant: het oog (chip = pupil), wimpers, wenkbrauw
+    F.append(boog(oog[0], oog[1], 3.25, 0, 360, 0.25, 72))
+    for a in (30, 52, 74, 96, 118, 140):
+        r0, r1 = 3.9, 5.4 if a not in (52, 96) else 6.0
+        F.append(LineString([(oog[0] + r0 * math.cos(math.radians(a)), oog[1] + r0 * math.sin(math.radians(a))),
+                             (oog[0] + r1 * math.cos(math.radians(a)), oog[1] + r1 * math.sin(math.radians(a)))]).buffer(0.13, 4))
+    F.append(boog(oog[0], oog[1], 7.3, 40, 135, 0.3))
+    # neus: ring om knop + LED
+    nx, ny = (knop[0] + neus[0]) / 2, (knop[1] + neus[1]) / 2
+    F.append(boog(nx, ny, 4.5, 0, 360, 0.25, 72))
+    # JST: polariteit
+    j1, j2 = ctx['jst1'], ctx['jst2']
+    F.append(gecentreerd('+', j1[0] + 1.0, j1[1] + 1.35, 1.3, False))
+    F.append(gecentreerd('-', j2[0] + 1.0, j2[1] - 1.35, 1.3, False))
+    F.append(gecentreerd('BAT', j1[0] - 1.4, j1[1] + 2.9, 1.0, False))
+    # kerstboodschap in het lijf
     ruim = outline.buffer(-1.6)
-    def fit(s, cx, cy, maxw, hoogte):
+    def fit(s, cx, cy, maxw, hoogte, spiegel=False):
         while hoogte > 0.8:
-            t = gecentreerd(s, cx, cy, hoogte, True)
+            t = gecentreerd(s, cx, cy, hoogte, spiegel)
             bb = t.bounds
             if bb[2] - bb[0] <= maxw and ruim.contains(t): return t
             hoogte *= 0.95
-        return gecentreerd(s, cx, cy, hoogte, True)
-    XC = 41.8
-    t1 = fit(BOODSCHAP[0], XC, 44.0, 29.0, 5.0)
-    t2 = fit(BOODSCHAP[1], XC, 39.3, 29.0, 3.4)
-    t3 = fit(ONDERTITEL, XC, 34.8, 26.0, 1.9)
-    for t in (t1, t2, t3): g.append(t)
-    # sneeuwvlokken rond de tekst
-    for (x, y, r, a) in ((29.5, 31.5, 2.0, 10), (54.5, 31.0, 1.8, 25), (51.5, 47.0, 1.5, 0), (37.5, 30.2, 1.4, 15), (45.5, 30.0, 1.5, 30)):
-        v = vlok(x, y, r, a)
-        if ruimte_B.contains(v): g.append(v)
-    # labels bij de achterpads (versprongen zodat ze niet over elkaar lopen)
-    for x, y, w, h, n, lab in backpads:
-        if lab == 'UPDI': g.append(gecentreerd(lab, x, y + h / 2 + 0.85, 0.8, True))
-        elif lab in ('VCC', 'GND'): g.append(gecentreerd(lab, x, y - h / 2 - 0.85, 0.8, True))
-        elif lab == 'HV': g.append(gecentreerd(lab + ' (UPDI)', x + 3.6, y - 0.9, 0.8, True))
-        elif lab == 'BT+': g.append(gecentreerd(lab, x, y - w / 2 - 1.1, 1.2, True))
-        elif lab == 'BT-': g.append(gecentreerd(lab, x, y + w / 2 + 1.1, 1.2, True))
-    B = unary_union(g)
-
-    # ---------- voorkant: sneeuwvlokken en sterren in vrije plekken + jaartal
-    kopergebied = copF.buffer(1.3)
-    vrij = outline.buffer(-2.0).difference(kopergebied)
-    F = []
+        return gecentreerd(s, cx, cy, hoogte, spiegel)
+    msg1 = fit(BOODSCHAP[0], 45.0, 41.6, 26.5, 3.9)
+    msg2 = fit(BOODSCHAP[1], 45.0, 37.2, 26.5, 2.7)
+    F += [msg1, msg2]
+    # sneeuwvlokken en sterren in vrije plekken
+    kopergebied = itemsF.buffer(1.3)
+    vrij = outline.buffer(-2.0).difference(kopergebied).difference(unary_union([msg1.buffer(1.0), msg2.buffer(1.0)] + F[:-2]).buffer(1.0))
     plaatsen = []
     import random
     rnd = random.Random(2026)
-    kand = []
     minx, miny, maxx, maxy = outline.bounds
-    for _ in range(4000):
-        x, y = rnd.uniform(minx, maxx), rnd.uniform(miny, maxy)
-        if vrij.contains(Point(x, y)): kand.append((x, y))
+    kand = [(rnd.uniform(minx, maxx), rnd.uniform(miny, maxy)) for _ in range(6000)]
     for (x, y) in kand:
         r = rnd.choice((1.1, 1.4, 1.8))
-        if vrij.contains(Point(x, y).buffer(r + 0.3)) and all(math.hypot(x - a, y - b) > 5.5 for a, b, _ in plaatsen):
+        if vrij.contains(Point(x, y).buffer(r + 0.3)) and all(math.hypot(x - a, y - b) > 6.0 for a, b, _ in plaatsen):
             plaatsen.append((x, y, r))
         if len(plaatsen) >= 16: break
     for i, (x, y, r) in enumerate(plaatsen):
         F.append(vlok(x, y, r, 8 * i) if i % 3 else ster(x, y, r * .9))
-    return {'F': unary_union(F) if F else Point(0, 0).buffer(0), 'B': B}
+
+    # ---------- achterkant: labels, boodschap + naam, sneeuwvlokken (gespiegeld, leesbaar bij omdraaien)
+    g = []
+    def links(s, xr, y, h):      # tekst eindigt (in bordcoordinaten) bij xr en loopt naar kleinere x
+        t = gecentreerd(s, 0, 0, h, True); b = t.bounds
+        return affinity.translate(t, xr - b[2], y)
+    def rechts(s, xl, y, h):
+        t = gecentreerd(s, 0, 0, h, True); b = t.bounds
+        return affinity.translate(t, xl - b[0], y)
+    for x, y, w, h, n, lab in backpads:
+        if lab == 'UPDI': g.append(links('UPDI 4k7', x - 3.6 - 1.9, y, 0.8))
+        elif lab in ('VCC', 'GND'): g.append(gecentreerd(lab, x, y - h / 2 - 2.6, 0.8, True))
+        elif lab == 'HV': g.append(links('HV: UPDI direct', x - 1.6, y, 0.8))
+        elif lab == 'BT+': g.append(rechts('+ batterij', x + 4.6, y, 1.2))
+        elif lab == 'BT-': g.append(rechts('- batterij', x + 4.6, y, 1.2))
+    ruim_B = outline.buffer(-1.6)
+    def fitB(s, cx, cy, maxw, h):
+        while h > 0.8:
+            t = gecentreerd(s, cx, cy, h, True); bb = t.bounds
+            if bb[2] - bb[0] <= maxw and ruim_B.contains(t): return t
+            h *= 0.95
+        return gecentreerd(s, cx, cy, h, True)
+    for t in (fitB(BOODSCHAP[0], 42.0, 41.0, 24.0, 3.4), fitB(BOODSCHAP[1], 42.0, 36.8, 24.0, 2.4), fitB(ONDERTITEL, 42.0, 32.6, 24.0, 1.6)):
+        g.append(t)
+    for (x, y, r, a) in ((52.5, 46.0, 1.7, 20), (30, 30.0, 1.6, 10), (56.5, 31.5, 1.5, 0)):
+        v = vlok(x, y, r, a)
+        if ruim_B.contains(v): g.append(v)
+    return {'F': unary_union(F), 'B': unary_union(g)}

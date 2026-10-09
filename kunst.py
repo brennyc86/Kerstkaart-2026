@@ -54,7 +54,7 @@ def boog(cx, cy, r, a0, a1, w=0.25, n=48):
 
 def maak_kunst(outline, P, itemsF, copB, backpads, vias, fps, ctx):
     from shapely.geometry import MultiPoint
-    oog, knop, neus, jst = ctx['oog'], ctx['knop'], ctx['neus'], ctx['jst']
+    oog, knop, neus = ctx['oog'], ctx['knop'], ctx['neus']
     F = []
     # ---------- voorkant: het oog (chip = pupil), wimpers, wenkbrauw
     F.append(boog(oog[0], oog[1], 3.25, 0, 360, 0.25, 72))
@@ -66,11 +66,6 @@ def maak_kunst(outline, P, itemsF, copB, backpads, vias, fps, ctx):
     # neus: ring om knop + LED
     nx, ny = (knop[0] + neus[0]) / 2, (knop[1] + neus[1]) / 2
     F.append(boog(nx, ny, 4.5, 0, 360, 0.25, 72))
-    # JST: polariteit
-    j1, j2 = ctx['jst1'], ctx['jst2']
-    F.append(gecentreerd('+', j1[0] + 1.0, j1[1] + 1.35, 1.3, False))
-    F.append(gecentreerd('-', j2[0] + 1.0, j2[1] - 1.35, 1.3, False))
-    F.append(gecentreerd('BAT', j1[0] - 1.4, j1[1] + 2.9, 1.0, False))
     # kerstboodschap in het lijf
     ruim = outline.buffer(-1.6)
     def fit(s, cx, cy, maxw, hoogte, spiegel=False):

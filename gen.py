@@ -99,7 +99,7 @@ def place(ref, naam, x, y, th, netmap, val, lcsc, reg=True):
 # ------------------------------------------------------------------ onderdelen
 QFN, LEDF, RF, CF, SWF, JSTF = ('VQFN-20-1EP_3x3mm_P0.4mm_EP1.7x1.7mm', 'LED_SK6812_EC15_1.5x1.5mm', 'R_0603_1608Metric',
                                 'C_0603_1608Metric', 'SW_SPST_B3U-1000P', 'JST_PH_S2B-PH-SM4-TB_1x02-1MP_P2.00mm_Horizontal')
-from ketting import OOG_MM, KNOP_MM, NEUS_MM, JST_MM
+from ketting import OOG_MM, KNOP_MM, NEUS_MM
 CX, CY = OOG_MM
 def qp(n):   # padcentrum van QFN-pen n (1..20), y omhoog
     if n <= 5: return (CX - 1.45, CY + 0.8 - (n - 1) * 0.4)
@@ -183,8 +183,6 @@ r2 = place('R2', RF, CX - 0.4, CY + 4.8, math.pi / 2, {'1': 'UPDI0', '2': 'UPDI_
 track([qp(19), r2['1']], 'UPDI0', w=0.2)
 # knopje = neus van Rudolf (Omron B3U-1000P)
 sw = place('SW1', SWF, KNOP_MM[0], KNOP_MM[1], 0, {'1': 'BTN', '2': 'GND'}, 'B3U-1000P', 'C231329')
-# tweede batterij-aansluiting: JST-PH (pen 1 = +, pen 2 = -), plug komt in de buikopening
-jst = place('J1', JSTF, JST_MM[0], JST_MM[1], -math.pi / 2, {'1': 'VCC', '2': 'GND'}, 'S2B-PH-SM4-TB(LF)(SN)', 'C295747')
 
 # ---- koperpads op de achterkant: [VCC][UPDI via 4,7k][GND] + directe UPDI (HV) + grote batterijpads
 def bpad(x, y, w, h, netn, label):
@@ -204,12 +202,11 @@ bvia(KX, KY + 2.6, KX, KY + 4.9, 'UPDI0')
 bpad(15.2, 37.2, 4.6, 3.8, 'VCC', 'BT+')
 bpad(15.2, 42.6, 4.6, 3.8, 'GND', 'BT-')
 bvia(15.2, 42.6, 18.9, 42.6, 'GND')
-# bovenkant: knop, UPDI-routes, JST-via
+# bovenkant: knop, UPDI-routes
 route_free(qp(8), (sw['1'][0], sw['1'][1]), 'BTN', wp=[(CX, CY - 4.2)])
 track([qp(19), (CX - 0.4, CY + 2.4)], 'UPDI0', w=0.2)
 route_free((CX - 0.4, CY + 2.4), (KX, KY + 4.9), 'UPDI0')
 route_free(r2['2'], (KX, KY - 2.2), 'UPDI_R')
-via(jst['1'][0] + 3.0, jst['1'][1], 'VCC'); track([jst['1'], (jst['1'][0] + 3.0, jst['1'][1])], 'VCC', w=0.5)
 
 # ------------------------------------------------------------------ LED-keten
 led = keten()
@@ -254,7 +251,7 @@ for i in range(len(P)):
         wps = P[i][3]
         for r in routes(a, pp['DI'], wps):
             ln = LineString(r).buffer(TW / 2, 8)
-            if B.vrij(ln, netsd['DI'], ['F']) and not ln.intersects(g['VDD'].buffer(0.12)): okroute = r; break
+            if B.vrij(ln, netsd['DI'], ['F']) and all(ln.distance(g[k_]) >= CLR for k_ in ('VDD', 'GND', 'DO')): okroute = r; break
         if okroute is None:
             why['route'] = why.get('route', 0) + 1
             if os.environ.get('DBGLED') == str(i):
@@ -272,7 +269,7 @@ for i in range(len(P)):
                 ang = k_ * math.pi / 12
                 e = (pp['GND'][0] + math.cos(ang) * dist, pp['GND'][1] + math.sin(ang) * dist)
                 trs = LineString([pp['GND'], e]).buffer(0.125, 8)
-                if B.vrij(trs, 'GND', ['F']) and not trs.intersects(rl) and not trs.intersects(seg_out) and not trs.intersects(g['VDD'].buffer(0.75)):
+                if B.vrij(trs, 'GND', ['F']) and not trs.intersects(rl) and not trs.intersects(seg_out) and not trs.intersects(g['VDD'].buffer(0.75)) and all(trs.distance(g[k_]) >= CLR for k_ in ('DI', 'DO', 'VDD')):
                     stub = [pp['GND'], e]; break
             if stub: break
         if stub is None: why['stub'] = why.get('stub', 0) + 1; continue
@@ -318,11 +315,12 @@ def zones(laag, netn):
     comps = list(pour.geoms) if hasattr(pour, 'geoms') else [pour]
     own = [g for g, n, k in items if n == netn]
     keep = [c for c in comps if any(c.buffer(0.02).intersects(o) for o in own)]
+    losse = [c for c in comps if c not in keep and c.area > 0.8]   # randvulling / eilanden: puur optisch, zwevend
     alles = unary_union(own + keep).buffer(0.02)
     delen = list(alles.geoms) if hasattr(alles, 'geoms') else [alles]
     # elk deel van dit net moet in één samenhangend geheel zitten
     own_unreached = [] if len(delen) == 1 else [d for d in sorted(delen, key=lambda d: -d.area)[1:]]
-    return unary_union(keep), len(delen), own_unreached
+    return unary_union(keep + losse), len(delen), own_unreached
 pourF, nF, lostF = zones('F', 'GND')
 pourB, nB, lostB = zones('B', 'VCC')
 print('GND samenhangende delen:', nF, '| VCC samenhangende delen:', nB)
@@ -364,7 +362,7 @@ def fp_silk(f):
 
 silkF_lib = unary_union([g for g in (fp_silk(f) for f in fps) if g is not None])
 itemsF = unary_union([gg for gg, n, kk in cu('F')])
-kunst = maak_kunst(outline, P, itemsF, copB, backpads, vias, fps, dict(oog=OOG_MM, knop=KNOP_MM, neus=NEUS_MM, jst=JST_MM, jst1=jst['1'], jst2=jst['2']))
+kunst = maak_kunst(outline, P, itemsF, copB, backpads, vias, fps, dict(oog=OOG_MM, knop=KNOP_MM, neus=NEUS_MM))
 copper_all = unary_union([copF.buffer(0.0)])
 verbod = unary_union([maskF.buffer(0.15), unary_union([g.buffer(0.2) for g, n, l, k in B.items if l == 'F' and k in ('pad', 'via')])])
 silkF = unary_union([silkF_lib.difference(maskF.buffer(0.12)), kunst['F'].difference(verbod)])
